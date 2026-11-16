@@ -31,7 +31,7 @@ app.use(compression());
 app.use(cors({ origin: process.env.CLIENT_ORIGIN || '*' }));
 app.use(express.json({ limit: '10mb' }));
 
-app.use('/api/', rateLimit({ windowMs: 60 * 1000, max: 120, standardHeaders: true, legacyHeaders: false }));
+app.use('/api/', rateLimit({ windowMs: 60 * 1000, max: 120, standardHeaders: true, legacyHeaders: false, validate: { xForwardedForHeader: false } }));
 
 // ── API routes ────────────────────────────────────────────────────────────────
 

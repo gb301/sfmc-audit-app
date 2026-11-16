@@ -22,3 +22,5 @@ export const getAlerts = (orgId) => api.get(`/audit/orgs/${orgId}/alerts`).then(
 export const spotTest = (orgId, type, id) => api.post(`/audit/orgs/${orgId}/test`, { type, id }).then(r => r.data);
 export const getAuditLog    = (orgId) => api.get(`/audit/orgs/${orgId}/log`).then(r => r.data);
 export const getOrgContext  = (orgId) => api.get(`/audit/orgs/${orgId}/context`).then(r => r.data);
+export const previewEmail   = (orgId, emailId, deKey, rowIndex) => api.post(`/audit/orgs/${orgId}/preview-email`, { emailId, deKey, rowIndex }).then(r => r.data);
+export const getSendableDEs = (orgId) => api.get(`/audit/orgs/${orgId}/sendable-des`).then(r => r.data);

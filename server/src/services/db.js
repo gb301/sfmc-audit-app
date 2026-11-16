@@ -114,7 +114,7 @@ const auditLog = {
 // ── Context Cache ─────────────────────────────────────────────────────────────
 
 const contextCache = {
-  set: (id, orgId, dataType, payload) => db.prepare('INSERT OR REPLACE INTO context_cache (id,org_id,data_type,payload,collected_at) VALUES (?,?,?,?,datetime("now"))').run(id, orgId, dataType, JSON.stringify(payload)),
+  set: (id, orgId, dataType, payload) => db.prepare("INSERT OR REPLACE INTO context_cache (id,org_id,data_type,payload,collected_at) VALUES (?,?,?,?,datetime('now'))").run(id, orgId, dataType, JSON.stringify(payload)),
   get: (orgId, dataType) => {
     const row = db.prepare('SELECT * FROM context_cache WHERE org_id=? AND data_type=? ORDER BY collected_at DESC LIMIT 1').get(orgId, dataType);
     return row ? JSON.parse(row.payload) : null;

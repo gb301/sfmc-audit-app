@@ -36,8 +36,8 @@ async function getAccessToken(creds) {
 
   const result = {
     accessToken: data.access_token,
-    restBaseUrl: data.rest_instance_url || `https://${subdomain}.rest.marketingcloudapis.com`,
-    soapBaseUrl: data.soap_instance_url || `https://${subdomain}.soap.marketingcloudapis.com`,
+    restBaseUrl: (data.rest_instance_url || `https://${subdomain}.rest.marketingcloudapis.com`).replace(/\/$/, ''),
+    soapBaseUrl: (data.soap_instance_url || `https://${subdomain}.soap.marketingcloudapis.com`).replace(/\/$/, ''),
     expiresIn: data.expires_in || 1200,
   };
 
@@ -68,22 +68,17 @@ async function restClient(creds) {
 }
 
 /**
- * Build SOAP envelope with WS-Security UsernameToken.
+ * Build SOAP 1.2 envelope with fueloauth token header (SFMC standard OAuth2 auth).
  */
 async function soapEnvelope(creds, body) {
   const { accessToken, soapBaseUrl } = await getAccessToken(creds);
   const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"
-            xmlns:a="http://schemas.xmlsoap.org/ws/2004/08/addressing"
-            xmlns:u="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd">
+            xmlns:a="http://schemas.xmlsoap.org/ws/2004/08/addressing">
   <s:Header>
     <a:Action s:mustUnderstand="1">Retrieve</a:Action>
-    <o:Security xmlns:o="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd">
-      <o:UsernameToken>
-        <o:Username>${creds.clientId}</o:Username>
-        <o:Password Type="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-username-token-profile-1.0#PasswordText">${accessToken}</o:Password>
-      </o:UsernameToken>
-    </o:Security>
+    <a:To s:mustUnderstand="1">${soapBaseUrl}/Service.asmx</a:To>
+    <fueloauth xmlns="http://exacttarget.com">${accessToken}</fueloauth>
   </s:Header>
   <s:Body>${body}</s:Body>
 </s:Envelope>`;

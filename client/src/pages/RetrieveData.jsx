@@ -57,7 +57,9 @@ export default function RetrieveData() {
   };
 
   const isRunning = !!activeRun;
-  const pct = runStatus?.progress ?? 0;
+  const isDone = !isRunning && runStatus?.status === 'completed';
+  const isFailed = !isRunning && runStatus?.status === 'failed';
+  const pct = isDone ? 100 : (runStatus?.progress ?? 0);
 
   return (
     <div>
@@ -80,21 +82,37 @@ export default function RetrieveData() {
           </button>
         </div>
 
-        {isRunning && runStatus && (
+        {(isRunning || isDone || isFailed) && runStatus ? (
           <div>
-            <div style={{ fontSize: 13, color: 'var(--sf-gray-700)', marginBottom: 8 }}>
-              {runStatus.phase || 'Initialising…'}
-            </div>
+            {isDone ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, fontWeight: 600, color: 'var(--sf-green)', marginBottom: 8 }}>
+                <span style={{ fontSize: 20, lineHeight: 1 }}>✅</span>
+                Scan complete
+                {runStatus.finding_count != null && (
+                  <span style={{ fontWeight: 400, color: 'var(--sf-gray-600)', fontSize: 13 }}>
+                    — {runStatus.finding_count} finding{runStatus.finding_count !== 1 ? 's' : ''} generated
+                  </span>
+                )}
+              </div>
+            ) : isFailed ? (
+              <div style={{ fontSize: 13, color: 'var(--sf-red)', marginBottom: 8 }}>Scan failed: {runStatus.phase}</div>
+            ) : (
+              <div style={{ fontSize: 13, color: 'var(--sf-gray-700)', marginBottom: 8 }}>
+                {runStatus.phase || 'Initialising…'}
+              </div>
+            )}
+
             <div className="progress-bar">
-              <div className="progress-bar__fill" style={{ width: `${pct}%` }} />
+              <div className="progress-bar__fill" style={{ width: `${pct}%`, background: isDone ? 'var(--sf-green)' : undefined }} />
             </div>
             <div style={{ fontSize: 11, color: 'var(--sf-gray-500)', marginTop: 4 }}>{pct}%</div>
 
             <div style={{ marginTop: 16, display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 4 }}>
               {PHASES.map((ph, i) => {
-                const idx = PHASES.indexOf(runStatus.phase);
-                const done = idx > i;
-                const active = idx === i;
+                const allDone = isDone;
+                const idx = allDone ? PHASES.length : PHASES.indexOf(runStatus.phase);
+                const done = allDone || idx > i;
+                const active = !allDone && idx === i;
                 return (
                   <div key={ph} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: done ? 'var(--sf-green)' : active ? 'var(--sf-blue)' : 'var(--sf-gray-300)' }}>
                     <span>{done ? '✓' : active ? '▶' : '○'}</span>
@@ -104,9 +122,7 @@ export default function RetrieveData() {
               })}
             </div>
           </div>
-        )}
-
-        {!isRunning && (
+        ) : (
           <p style={{ fontSize: 13, color: 'var(--sf-gray-500)' }}>
             The scan collects emails, journeys, automations, data extensions, SQL queries, send definitions, event definitions, users, and recent send metrics. Findings are generated automatically on completion.
           </p>

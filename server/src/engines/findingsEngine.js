@@ -5,15 +5,35 @@
  */
 
 const Anthropic = require('@anthropic-ai/sdk');
+const { execSync } = require('child_process');
 const { v4: uuidv4 } = require('uuid');
 
-const client = process.env.ANTHROPIC_API_KEY
-  ? new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
-  : null;
+function makeClient() {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const baseURL = process.env.ANTHROPIC_BASE_URL;
+  const keyHelper = process.env.ANTHROPIC_API_KEY_HELPER;
+
+  if (apiKey && !apiKey.startsWith('sk-ant-...')) {
+    return new Anthropic({ apiKey, ...(baseURL ? { baseURL } : {}) });
+  }
+  if (keyHelper) {
+    try {
+      const freshKey = execSync(keyHelper, { timeout: 5000 }).toString().trim();
+      return new Anthropic({ apiKey: freshKey, ...(baseURL ? { baseURL } : {}) });
+    } catch {}
+  }
+  if (baseURL) {
+    // Try without explicit key — gateway may use ambient auth
+    return new Anthropic({ apiKey: 'gateway', baseURL });
+  }
+  return null;
+}
+
+const client = makeClient();
 
 // ── Finding helpers ───────────────────────────────────────────────────────────
 
-function finding(severity, category, title, detail, remediation, entity = {}) {
+function finding(severity, category, title, detail, remediation, entity = {}, pattern = null) {
   return {
     id: uuidv4(),
     severity,
@@ -24,6 +44,7 @@ function finding(severity, category, title, detail, remediation, entity = {}) {
     entity_type: entity.type || null,
     entity_id:   entity.id   || null,
     entity_name: entity.name || null,
+    pattern,
   };
 }
 
@@ -43,17 +64,19 @@ function analyseAMPScript(html, emailName, emailId) {
   }
 
   // Lookup without fallback
-  if (/Lookup\s*\([^)]*\)/i.test(html) && !/IIF\s*\(\s*EMPTY\s*\(/i.test(html)) {
+  const lookupMatch = html.match(/Lookup\s*\([^)]*\)/i);
+  if (lookupMatch && !/IIF\s*\(\s*EMPTY\s*\(/i.test(html)) {
     findings.push(finding('HIGH', 'ampscript', 'Lookup() without empty-string fallback',
       'AMPScript Lookup() calls found with no IIF(EMPTY(...)) guard — will render blank for unmatched rows.',
-      'Wrap every Lookup() in IIF(EMPTY(@var), "default", @var) or add a fallback parameter.', e));
+      'Wrap every Lookup() in IIF(EMPTY(@var), "default", @var) or add a fallback parameter.', e, lookupMatch[0]));
   }
 
   // LookupRows without RowCount check
-  if (/LookupRows\s*\(/i.test(html) && !/RowCount\s*\(/i.test(html)) {
+  const lookupRowsMatch = html.match(/LookupRows\s*\([^)]*\)/i);
+  if (lookupRowsMatch && !/RowCount\s*\(/i.test(html)) {
     findings.push(finding('HIGH', 'ampscript', 'LookupRows() without RowCount check',
       'LookupRows() found without a preceding RowCount() check — iterating an empty rowset will error.',
-      'Add: SET @count = RowCount(@rows); IF @count > 0 THEN ... before iterating.', e));
+      'Add: SET @count = RowCount(@rows); IF @count > 0 THEN ... before iterating.', e, lookupRowsMatch[0]));
   }
 
   // PersonalizationString without fallback
@@ -62,22 +85,24 @@ function analyseAMPScript(html, emailName, emailId) {
     if (!html.includes(`IIF(EMPTY`) && !html.includes(`default=`)) {
       findings.push(finding('MEDIUM', 'ampscript', `Personalization token %%=AttributeValue("${m[1]}")=%% without fallback`,
         'Personalization will render blank if subscriber has no value for this attribute.',
-        `Wrap in IIF(EMPTY(AttributeValue("${m[1]}")), "there", AttributeValue("${m[1]}")).`, e));
+        `Wrap in IIF(EMPTY(AttributeValue("${m[1]}")), "there", AttributeValue("${m[1]}")).`, e, m[0]));
     }
   });
 
   // HTTPGet / HTTPPost (performance risk)
-  if (/HTTPGet\s*\(|HTTPPost\s*\(/i.test(html)) {
+  const httpMatch = html.match(/HTTPGet\s*\(|HTTPPost\s*\(/i);
+  if (httpMatch) {
     findings.push(finding('MEDIUM', 'ampscript', 'HTTPGet/HTTPPost in email template',
       'HTTP calls inside AMPScript increase render time per subscriber and may hit timeouts.',
-      'Cache data in a Data Extension via automation and use Lookup() instead of live HTTP calls.', e));
+      'Cache data in a Data Extension via automation and use Lookup() instead of live HTTP calls.', e, httpMatch[0]));
   }
 
   // TreatAsContent (security risk)
-  if (/TreatAsContent\s*\(/i.test(html)) {
+  const tacMatch = html.match(/TreatAsContent\s*\([^)]*\)/i);
+  if (tacMatch) {
     findings.push(finding('HIGH', 'ampscript', 'TreatAsContent() detected',
       'TreatAsContent() executes arbitrary AMPScript stored in a DE field — potential injection vector.',
-      'Audit the source DE for untrusted input. Prefer static templates.', e));
+      'Audit the source DE for untrusted input. Prefer static templates.', e, tacMatch[0]));
   }
 
   // FOR loop without upper bound
@@ -86,7 +111,7 @@ function analyseAMPScript(html, emailName, emailId) {
     if (!html.match(new RegExp(`MIN\\s*\\(.*${m[1]}`, 'i'))) {
       findings.push(finding('LOW', 'ampscript', `FOR loop with uncapped iteration variable @${m[1]}`,
         'Unbounded FOR loops can exceed SFMC AMPScript limits (2500 iterations) and cause send failures.',
-        `Cap the loop: FOR @i = 1 TO MIN(@${m[1]}, 100) DO`, e));
+        `Cap the loop: FOR @i = 1 TO MIN(@${m[1]}, 100) DO`, e, m[0]));
     }
   });
 
@@ -117,21 +142,21 @@ function analyseCompliance(html, emailName, emailId) {
   if (httpLinks.length > 0) {
     findings.push(finding('MEDIUM', 'compliance', `${httpLinks.length} non-HTTPS link(s)`,
       'Non-HTTPS links may trigger browser security warnings and reduce subscriber trust.',
-      'Update all links to https://.', e));
+      'Update all links to https://.', e, httpLinks[0][0]));
   }
 
   const testUrls = [...html.matchAll(/href\s*=\s*["'][^"']*(?:localhost|127\.0\.0\.1|staging\.|\.dev\.|\.test\.)[^"']*["']/gi)];
   if (testUrls.length > 0) {
     findings.push(finding('CRITICAL', 'compliance', `${testUrls.length} localhost/staging URL(s) in production template`,
       'Test/staging URLs will not resolve for subscribers and expose internal infrastructure.',
-      'Replace all test URLs with production URLs before send.', e));
+      'Replace all test URLs with production URLs before send.', e, testUrls[0][0]));
   }
 
   const imgNoAlt = [...html.matchAll(/<img(?![^>]*\balt\s*=)[^>]*>/gi)];
   if (imgNoAlt.length > 0) {
     findings.push(finding('MEDIUM', 'accessibility', `${imgNoAlt.length} image(s) missing alt text`,
       'Images without alt text fail WCAG 2.1 AA and render as broken in image-blocked inboxes.',
-      'Add descriptive alt="..." or alt="" for decorative images.', e));
+      'Add descriptive alt="..." or alt="" for decorative images.', e, imgNoAlt[0][0].slice(0, 60)));
   }
 
   return findings;

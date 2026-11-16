@@ -5,7 +5,20 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 
 
 const SEV_ORDER   = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'];
 const SEV_COLORS  = { CRITICAL: '#c23934', HIGH: '#dd7a01', MEDIUM: '#f4b942', LOW: '#0070d2' };
-const CATEGORIES  = ['All', 'AMPScript', 'Compliance', 'Subject Line', 'Journey', 'Automation', 'Data Extension', 'SQL', 'Send Metrics', 'User Management'];
+
+// Maps the engine's snake_case category keys to display labels and groups
+const CAT_MAP = [
+  { key: 'All',          label: 'All',             match: null },
+  { key: 'ampscript',    label: 'AMPScript',        match: ['ampscript'] },
+  { key: 'compliance',   label: 'Compliance',       match: ['compliance', 'accessibility'] },
+  { key: 'subject_line', label: 'Subject Line',     match: ['subject_line'] },
+  { key: 'journey',      label: 'Journey',          match: ['journey'] },
+  { key: 'automation',   label: 'Automation',       match: ['automation'] },
+  { key: 'data',         label: 'Data Extensions',  match: ['data_hygiene', 'data_extension'] },
+  { key: 'sql',          label: 'SQL',              match: ['sql_quality'] },
+  { key: 'deliverability',label: 'Send Metrics',    match: ['deliverability'] },
+  { key: 'users',        label: 'User Management',  match: ['access_control'] },
+];
 
 function SevBadge({ sev }) {
   return <span className={`badge badge--${sev.toLowerCase()}`}>{sev}</span>;
@@ -48,7 +61,7 @@ export default function Findings() {
     if (!activeOrg) return;
     listRuns(activeOrg.id).then(r => {
       setRuns(r);
-      const done = r.find(x => x.status === 'completed');
+      const done = r.find(x => x.status === 'complete');
       if (done) setRunId(done.id);
     }).catch(() => {});
   }, [activeOrg]);
@@ -61,9 +74,15 @@ export default function Findings() {
 
   const counts = SEV_ORDER.map(s => ({ name: s, count: findings.filter(f => f.severity === s).length }));
 
+  const activeCat = CAT_MAP.find(c => c.key === catFilter) || CAT_MAP[0];
   const filtered = findings.filter(f =>
     (sevFilter === 'All' || f.severity === sevFilter) &&
-    (catFilter === 'All' || f.category === catFilter)
+    (activeCat.match === null || activeCat.match.includes(f.category))
+  );
+
+  // Count per category group for badge display
+  const catCounts = Object.fromEntries(
+    CAT_MAP.filter(c => c.match).map(c => [c.key, findings.filter(f => c.match.includes(f.category)).length])
   );
 
   if (!activeOrg) return <div className="alert alert--warning">No org selected.</div>;
@@ -79,7 +98,7 @@ export default function Findings() {
       <div style={{ marginBottom: 16 }}>
         <select className="form-select" style={{ maxWidth: 360 }} value={runId} onChange={e => setRunId(e.target.value)}>
           <option value="">Select a scan run…</option>
-          {runs.filter(r => r.status === 'completed').map(r => (
+          {runs.filter(r => r.status === 'complete').map(r => (
             <option key={r.id} value={r.id}>{r.id} — {new Date(r.started_at).toLocaleString()}</option>
           ))}
         </select>
@@ -99,15 +118,20 @@ export default function Findings() {
 
       {/* Filters */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
-        {CATEGORIES.map(c => (
-          <button key={c} className={`btn ${catFilter === c ? 'btn--primary' : 'btn--secondary'}`} style={{ fontSize: 11, padding: '4px 10px' }} onClick={() => setCatFilter(c)}>{c}</button>
-        ))}
+        {CAT_MAP.map(c => {
+          const n = c.match ? catCounts[c.key] : findings.length;
+          return (
+            <button key={c.key} className={`btn ${catFilter === c.key ? 'btn--primary' : 'btn--secondary'}`} style={{ fontSize: 11, padding: '4px 10px' }} onClick={() => setCatFilter(c.key)}>
+              {c.label}{n > 0 ? ` (${n})` : ''}
+            </button>
+          );
+        })}
       </div>
 
       <div className="card">
         <div className="card__header">
           <span className="card__title">Findings {filtered.length !== findings.length && `(${filtered.length} / ${findings.length})`}</span>
-          {sevFilter !== 'All' && <button className="btn btn--ghost" style={{ fontSize: 12 }} onClick={() => { setSevFilter('All'); setCatFilter('All'); }}>Clear filters</button>}
+          {(sevFilter !== 'All' || catFilter !== 'All') && <button className="btn btn--ghost" style={{ fontSize: 12 }} onClick={() => { setSevFilter('All'); setCatFilter('All'); }}>Clear filters</button>}
         </div>
 
         {loading ? (

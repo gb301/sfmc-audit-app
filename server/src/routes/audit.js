@@ -199,6 +199,89 @@ router.post('/orgs/:orgId/test', async (req, res) => {
   }
 });
 
+// ── Email preview with optional DE personalisation ────────────────────────────
+
+router.post('/orgs/:orgId/preview-email', async (req, res) => {
+  const org = orgs.get(req.params.orgId);
+  if (!org) return res.status(404).json({ error: 'Org not found' });
+
+  const { emailId, deKey, rowIndex = 0 } = req.body;
+  if (!emailId) return res.status(400).json({ error: 'emailId required' });
+
+  const creds = { clientId: org.client_id, clientSecret: org.client_secret, subdomain: org.subdomain, accountId: org.account_id };
+  const { getAccessToken } = require('../services/sfmcAuth');
+  const axios = require('axios');
+  const { analyseAMPScript, analyseCompliance, analyseSubjectLine } = require('../engines/findingsEngine');
+
+  try {
+    const { accessToken, restBaseUrl } = await getAccessToken(creds);
+    const http = axios.create({ baseURL: restBaseUrl, headers: { Authorization: `Bearer ${accessToken}` }, timeout: 15000 });
+
+    // Fetch email asset
+    const { data: asset } = await http.get(`/asset/v1/content/assets/${emailId}`);
+    let html = asset?.views?.html?.content || asset?.content || '';
+    const subject = asset?.views?.subjectline?.content || '';
+
+    // Run analysis on raw HTML first
+    const findings = [
+      ...analyseAMPScript(html, asset.name, String(asset.id)),
+      ...analyseCompliance(html, asset.name, String(asset.id)),
+      ...analyseSubjectLine(subject, asset.name, String(asset.id)),
+    ];
+
+    // If DE key provided, fetch a sample row and substitute simple %%Field%% tokens
+    let deRow = null;
+    let deFields = [];
+    if (deKey) {
+      try {
+        const { data: rows } = await http.get(
+          `/data/v1/customobjectdata/key/${encodeURIComponent(deKey)}/rowset`,
+          { params: { $pageSize: 10, $page: 1 } }
+        );
+        const items = rows.items || [];
+        const row = items[rowIndex] || items[0];
+        if (row) {
+          deRow = { ...(row.keys || {}), ...(row.values || {}) };
+          deFields = Object.keys(deRow);
+          // Substitute %%FieldName%% tokens (case-insensitive)
+          deFields.forEach(field => {
+            const val = deRow[field] ?? '';
+            html = html.replace(new RegExp(`%%${field}%%`, 'gi'), String(val));
+            html = html.replace(new RegExp(`%%=v\\(@${field}\\)=%%`, 'gi'), String(val));
+          });
+        }
+      } catch (_) { /* DE fetch failed — continue without substitution */ }
+    }
+
+    res.json({ html, subject, findings, deRow, emailName: asset.name });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── List sendable DEs for org ─────────────────────────────────────────────────
+
+router.get('/orgs/:orgId/sendable-des', async (req, res) => {
+  const org = orgs.get(req.params.orgId);
+  if (!org) return res.status(404).json({ error: 'Org not found' });
+
+  const cached = contextCache.get(org.id, 'full_context');
+  if (cached?.dataExtensions) {
+    const sendable = cached.dataExtensions.filter(d => d.isSendable).map(d => ({ customerKey: d.customerKey, name: d.name }));
+    return res.json(sendable);
+  }
+
+  // Fallback: fetch from SFMC directly
+  const creds = { clientId: org.client_id, clientSecret: org.client_secret, subdomain: org.subdomain, accountId: org.account_id };
+  const { collectDataExtensions } = require('../services/sfmcCollector');
+  try {
+    const all = await collectDataExtensions(creds);
+    res.json(all.filter(d => d.isSendable).map(d => ({ customerKey: d.customerKey, name: d.name })));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Latest context for org (for Context tab) ─────────────────────────────────
 
 router.get('/orgs/:orgId/context', (req, res) => {

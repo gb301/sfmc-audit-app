@@ -8,10 +8,9 @@ const axios = require('axios');
 const xml2js = require('xml2js');
 const { restClient, soapEnvelope } = require('./sfmcAuth');
 
-const xmlParser = new xml2js.Parser({ explicitArray: false, ignoreAttrs: true });
-
 async function parseSoap(xml) {
-  return xmlParser.parseStringPromise(xml);
+  const parser = new xml2js.Parser({ explicitArray: false, ignoreAttrs: false });
+  return parser.parseStringPromise(xml);
 }
 
 // ── REST helpers ──────────────────────────────────────────────────────────────
@@ -33,13 +32,22 @@ async function getAllPages(client, path, pageSize = 50) {
 
 async function collectEmailAssets(creds) {
   const client = await restClient(creds);
-  const { data } = await client.post('/asset/v1/content/assets/query', {
-    query: { property: 'assetType.name', simpleOperator: 'in', value: ['htmlemail', 'templatebasedemail', 'textonlyemail'] },
-    page: { page: 1, pageSize: 200 },
-    fields: ['id', 'name', 'assetType', 'category', 'createdDate', 'modifiedDate', 'status', 'views'],
-  });
+  const PAGE_SIZE = 200;
+  let page = 1;
+  let allItems = [];
+  while (true) {
+    const { data } = await client.post('/asset/v1/content/assets/query', {
+      query: { property: 'assetType.name', simpleOperator: 'in', value: ['htmlemail', 'templatebasedemail', 'textonlyemail'] },
+      page: { page, pageSize: PAGE_SIZE },
+      fields: ['id', 'name', 'assetType', 'category', 'createdDate', 'modifiedDate', 'status', 'views'],
+    });
+    const items = data.items || [];
+    allItems = allItems.concat(items);
+    if (allItems.length >= (data.count || 0) || items.length < PAGE_SIZE) break;
+    page++;
+  }
 
-  return (data.items || []).map(a => ({
+  return allItems.map(a => ({
     id: String(a.id),
     name: a.name,
     type: a.assetType?.name,
@@ -56,17 +64,42 @@ async function collectEmailAssets(creds) {
 // ── Data Extensions ───────────────────────────────────────────────────────────
 
 async function collectDataExtensions(creds) {
-  const client = await restClient(creds);
-  const items = await getAllPages(client, '/data/v1/customobjects', 100);
-  return items.map(de => ({
-    id: de.objectID || de.customerKey,
-    customerKey: de.customerKey,
-    name: de.name,
-    categoryId: de.categoryId,
-    isSendable: de.isSendable,
-    rowCount: de.rowCount,
-    createdDate: de.createdDate,
-    modifiedDate: de.modifiedDate,
+  // REST /data/v1/customobjects requires $search and returns at most 50 items.
+  // Use SOAP DataExtension Retrieve instead for a full unrestricted list.
+  const properties = [
+    'ObjectID', 'CustomerKey', 'Name', 'CategoryID',
+    'IsSendable', 'CreatedDate', 'ModifiedDate',
+    'Description', 'SendableDataExtensionField.Name',
+  ];
+  const bodyXml = `
+    <RetrieveRequestMsg xmlns="http://exacttarget.com/wsdl/partnerAPI">
+      <RetrieveRequest>
+        <ObjectType>DataExtension</ObjectType>
+        ${properties.map(p => `<Properties>${p}</Properties>`).join('\n        ')}
+      </RetrieveRequest>
+    </RetrieveRequestMsg>`;
+
+  const { xml, soapBaseUrl } = await soapEnvelope(creds, bodyXml);
+  const { data: rawXml } = await axios.post(`${soapBaseUrl}/Service.asmx`, xml, {
+    headers: { 'Content-Type': 'application/soap+xml; charset=utf-8', SOAPAction: 'Retrieve' },
+    timeout: 60000,
+  });
+
+  const parsed = await parseSoap(rawXml);
+  const body = parsed?.['soap:Envelope']?.['soap:Body'] || parsed?.['s:Envelope']?.['s:Body'];
+  const results = body?.RetrieveResponseMsg?.Results;
+  if (!results) return [];
+  const arr = Array.isArray(results) ? results : [results];
+  return arr.map(de => ({
+    id: de.ObjectID,
+    customerKey: de.CustomerKey,
+    name: de.Name,
+    categoryId: de.CategoryID,
+    isSendable: de.IsSendable === 'true',
+    rowCount: de.RowCount ? parseInt(de.RowCount) : null,
+    createdDate: de.CreatedDate,
+    modifiedDate: de.ModifiedDate,
+    description: de.Description,
   }));
 }
 
@@ -132,41 +165,33 @@ async function collectSQLQueries(creds) {
 
 async function collectSendDefinitions(creds) {
   const client = await restClient(creds);
-  try {
-    const items = await getAllPages(client, '/messaging/v1/email/definitions', 50);
-    return items.map(d => ({
-      id: d.definitionKey,
-      name: d.name,
-      status: d.status,
-      type: 'transactional_email',
-      contentKey: d.content?.customerKey,
-      subscriptionList: d.subscriptions?.list,
-      createdDate: d.createdDate,
-      modifiedDate: d.modifiedDate,
-    }));
-  } catch {
-    return [];
-  }
+  const items = await getAllPages(client, '/messaging/v1/email/definitions', 50);
+  return items.map(d => ({
+    id: d.definitionKey,
+    name: d.name,
+    status: d.status,
+    type: 'transactional_email',
+    contentKey: d.content?.customerKey,
+    subscriptionList: d.subscriptions?.list,
+    createdDate: d.createdDate,
+    modifiedDate: d.modifiedDate,
+  }));
 }
 
 // ── Event Definitions ─────────────────────────────────────────────────────────
 
 async function collectEventDefinitions(creds) {
   const client = await restClient(creds);
-  try {
-    const { data } = await client.get('/interaction/v1/eventDefinitions', { params: { $pageSize: 200 } });
-    return (data.items || data || []).map(e => ({
-      id: e.id,
-      key: e.eventDefinitionKey,
-      name: e.name,
-      type: e.type,
-      mode: e.mode,
-      dataExtensionId: e.dataExtensionId,
-      createdDate: e.createdDate,
-    }));
-  } catch {
-    return [];
-  }
+  const { data } = await client.get('/interaction/v1/eventDefinitions', { params: { $pageSize: 200 } });
+  return (data.items || data || []).map(e => ({
+    id: e.id,
+    key: e.eventDefinitionKey,
+    name: e.name,
+    type: e.type,
+    mode: e.mode,
+    dataExtensionId: e.dataExtensionId,
+    createdDate: e.createdDate,
+  }));
 }
 
 // ── Recent Sends (from SOAP _Sent data view summary) ─────────────────────────
@@ -200,12 +225,14 @@ async function collectRecentSendSummary(creds) {
 
     const { xml, soapBaseUrl } = await soapEnvelope(creds, bodyXml);
     const { data: rawXml } = await axios.post(`${soapBaseUrl}/Service.asmx`, xml, {
-      headers: { 'Content-Type': 'text/xml', SOAPAction: 'Retrieve' },
+      headers: { 'Content-Type': 'application/soap+xml; charset=utf-8', SOAPAction: 'Retrieve' },
       timeout: 30000,
     });
 
     const parsed = await parseSoap(rawXml);
-    const results = parsed?.['soap:Envelope']?.['soap:Body']?.RetrieveResponseMsg?.Results;
+    // SOAP 1.2 uses 'soap:' prefix for envelope but body key depends on parser
+    const body = parsed?.['soap:Envelope']?.['soap:Body'] || parsed?.['s:Envelope']?.['s:Body'];
+    const results = body?.RetrieveResponseMsg?.Results;
     if (!results) return [];
     const arr = Array.isArray(results) ? results : [results];
     return arr.map(s => ({
@@ -221,8 +248,8 @@ async function collectRecentSendSummary(creds) {
       unsubscribed: parseInt(s.NumberUnsubscribed || 0),
       sentDate: s.SentDate,
     }));
-  } catch {
-    return [];
+  } catch (err) {
+    throw err;
   }
 }
 
@@ -238,7 +265,6 @@ async function collectUsers(creds) {
           <Properties>Name</Properties>
           <Properties>Email</Properties>
           <Properties>UserID</Properties>
-          <Properties>IsActive</Properties>
           <Properties>LastSuccessfulLogin</Properties>
           <Properties>MustChangePassword</Properties>
           <Properties>ActiveFlag</Properties>
@@ -247,12 +273,13 @@ async function collectUsers(creds) {
 
     const { xml, soapBaseUrl } = await soapEnvelope(creds, bodyXml);
     const { data: rawXml } = await axios.post(`${soapBaseUrl}/Service.asmx`, xml, {
-      headers: { 'Content-Type': 'text/xml', SOAPAction: 'Retrieve' },
+      headers: { 'Content-Type': 'application/soap+xml; charset=utf-8', SOAPAction: 'Retrieve' },
       timeout: 20000,
     });
 
     const parsed = await parseSoap(rawXml);
-    const results = parsed?.['soap:Envelope']?.['soap:Body']?.RetrieveResponseMsg?.Results;
+    const body = parsed?.['soap:Envelope']?.['soap:Body'] || parsed?.['s:Envelope']?.['s:Body'];
+    const results = body?.RetrieveResponseMsg?.Results;
     if (!results) return [];
     const arr = Array.isArray(results) ? results : [results];
     return arr.map(u => ({
@@ -264,8 +291,8 @@ async function collectUsers(creds) {
       lastLogin: u.LastSuccessfulLogin,
       mustChangePassword: u.MustChangePassword === 'true',
     }));
-  } catch {
-    return [];
+  } catch (err) {
+    throw err;
   }
 }
 
