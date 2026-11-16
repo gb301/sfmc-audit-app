@@ -24,3 +24,8 @@ export const getAuditLog    = (orgId) => api.get(`/audit/orgs/${orgId}/log`).the
 export const getOrgContext  = (orgId) => api.get(`/audit/orgs/${orgId}/context`).then(r => r.data);
 export const previewEmail   = (orgId, emailId, deKey, rowIndex) => api.post(`/audit/orgs/${orgId}/preview-email`, { emailId, deKey, rowIndex }).then(r => r.data);
 export const getSendableDEs = (orgId) => api.get(`/audit/orgs/${orgId}/sendable-des`).then(r => r.data);
+
+// Notifications
+export const getNotifications = (orgId) => api.get(`/orgs/${orgId}/notifications`).then(r => r.data);
+export const updateNotifications = (orgId, data) => api.patch(`/orgs/${orgId}/notifications`, data).then(r => r.data);
+export const triggerScheduledRun = (orgId) => api.post(`/audit/orgs/${orgId}/scheduled-run`).then(r => r.data);

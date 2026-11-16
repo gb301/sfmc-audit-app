@@ -8,6 +8,7 @@ const rateLimit = require('express-rate-limit');
 
 const orgsRouter  = require('./routes/orgs');
 const auditRouter = require('./routes/audit');
+const scheduler   = require('./services/scheduler');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -52,6 +53,7 @@ if (process.env.NODE_ENV === 'production') {
 
 app.listen(PORT, () => {
   console.log(`SFMC Audit App running on port ${PORT} [${process.env.NODE_ENV || 'development'}]`);
+  scheduler.start();
 });
 
 module.exports = app;

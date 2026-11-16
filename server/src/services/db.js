@@ -12,6 +12,14 @@ const db = new Database(DB_PATH);
 // WAL mode for concurrent reads
 db.pragma('journal_mode = WAL');
 
+// Add notification columns to existing orgs table if they don't exist yet
+for (const col of [
+  "ALTER TABLE orgs ADD COLUMN alert_email TEXT",
+  "ALTER TABLE orgs ADD COLUMN alert_threshold TEXT DEFAULT 'CRITICAL_AND_HIGH'",
+]) {
+  try { db.exec(col); } catch (_) { /* column already exists */ }
+}
+
 db.exec(`
   CREATE TABLE IF NOT EXISTS orgs (
     id          TEXT PRIMARY KEY,
@@ -21,7 +29,9 @@ db.exec(`
     client_secret TEXT NOT NULL,
     account_id  TEXT,
     created_at  TEXT DEFAULT (datetime('now')),
-    last_used   TEXT
+    last_used   TEXT,
+    alert_email TEXT,
+    alert_threshold TEXT DEFAULT 'CRITICAL_AND_HIGH'
   );
 
   CREATE TABLE IF NOT EXISTS audit_runs (
@@ -78,6 +88,8 @@ const orgs = {
   update: (id, fields) => db.prepare('UPDATE orgs SET name=@name, subdomain=@subdomain, client_id=@client_id, client_secret=@client_secret, account_id=@account_id WHERE id=@id').run({ id, ...fields }),
   touch: (id) => db.prepare("UPDATE orgs SET last_used=datetime('now') WHERE id=?").run(id),
   delete: (id) => db.prepare('DELETE FROM orgs WHERE id=?').run(id),
+  updateNotifications: (id, alertEmail, alertThreshold) =>
+    db.prepare('UPDATE orgs SET alert_email=?, alert_threshold=? WHERE id=?').run(alertEmail || null, alertThreshold || 'CRITICAL_AND_HIGH', id),
 };
 
 // ── Audit Runs ────────────────────────────────────────────────────────────────

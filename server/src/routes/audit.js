@@ -304,4 +304,14 @@ router.get('/log', (req, res) => {
   res.json(auditLog.all(500));
 });
 
+// ── Manual trigger for scheduled audit (for testing) ─────────────────────────
+
+router.post('/orgs/:orgId/scheduled-run', async (req, res) => {
+  const org = orgs.get(req.params.orgId);
+  if (!org) return res.status(404).json({ error: 'Org not found' });
+  res.json({ started: true, message: 'Scheduled audit run started in background' });
+  const { runAuditForOrg } = require('../services/scheduler');
+  setImmediate(() => runAuditForOrg(org));
+});
+
 module.exports = router;

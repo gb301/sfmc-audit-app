@@ -68,6 +68,23 @@ router.delete('/:id', (req, res) => {
   res.json({ deleted: true });
 });
 
+// Update notification settings
+router.patch('/:id/notifications', (req, res) => {
+  const org = orgs.get(req.params.id);
+  if (!org) return res.status(404).json({ error: 'Org not found' });
+  const { alertEmail, alertThreshold } = req.body;
+  orgs.updateNotifications(req.params.id, alertEmail ?? org.alert_email, alertThreshold ?? org.alert_threshold);
+  auditLog.append({ org_id: req.params.id, run_id: null, action: 'NOTIFICATIONS_UPDATED', actor: 'user', detail: `Alert email: ${alertEmail || '(none)'}` });
+  res.json({ alertEmail: alertEmail ?? org.alert_email, alertThreshold: alertThreshold ?? org.alert_threshold });
+});
+
+// Get notification settings
+router.get('/:id/notifications', (req, res) => {
+  const org = orgs.get(req.params.id);
+  if (!org) return res.status(404).json({ error: 'Org not found' });
+  res.json({ alertEmail: org.alert_email || '', alertThreshold: org.alert_threshold || 'CRITICAL_AND_HIGH' });
+});
+
 // Test connection
 router.post('/:id/test', async (req, res) => {
   const org = orgs.get(req.params.id);
