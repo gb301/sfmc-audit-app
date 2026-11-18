@@ -20,11 +20,23 @@ A hosted web application for auditing Salesforce Marketing Cloud instances. Conn
 
 ## Local development
 
+### First-run checklist
+
+Before the app is fully functional you need three things:
+
+| # | What | Where |
+|---|------|-------|
+| 1 | **Anthropic API key** | [console.anthropic.com](https://console.anthropic.com) → API Keys → add to `.env` as `ANTHROPIC_API_KEY` |
+| 2 | **SFMC org credentials** | SFMC Setup → Installed Packages → create a package (see [SFMC installed package setup](#sfmc-installed-package-setup) below) → add via the app's **Manage Orgs** dialog |
+| 3 | **Alert recipient email** | Once the app is running, go to the **Alerts** tab → Alert Delivery → enter your email and save |
+
+Items 1 and 2 are required to run audits. Item 3 is optional — without it the nightly scheduler still runs but no alert email is sent.
+
 ### Prerequisites
 
 - Node.js 20+
-- An SFMC installed package with API Integration (OAuth 2.0 Server-to-Server), scopes: `email_read`, `journeys_read`, `automations_read`, `data_extensions_read`, `accounts_read`, `users_read`
-- An Anthropic API key (for the AI summary — the app works without it, with a fallback message)
+- An SFMC installed package (OAuth 2.0 Server-to-Server) — see setup below
+- An Anthropic API key (for AI summaries — the app works without it, with a fallback message)
 
 ### Install and run
 
@@ -32,9 +44,9 @@ A hosted web application for auditing Salesforce Marketing Cloud instances. Conn
 git clone <your-repo>
 cd sfmc-audit-app
 cp .env.example .env
-# edit .env — add your ANTHROPIC_API_KEY
+# edit .env — add ANTHROPIC_API_KEY and APP_URL at minimum
 npm install          # installs server deps + triggers client install via postinstall
-npm run dev          # starts server on :3000, React dev server on :3001
+npm run dev          # starts server on :3001
 ```
 
 Open [http://localhost:3001](http://localhost:3001) and add your first org via **Manage Orgs**.
@@ -140,13 +152,22 @@ heroku open
 |----------|----------|-------------|
 | `PORT` | No | Server port (Heroku sets this automatically) |
 | `NODE_ENV` | Yes (prod) | Set to `production` to serve the React build |
-| `ANTHROPIC_API_KEY` | Recommended | Claude AI for executive summaries |
+| `APP_URL` | Recommended | Public URL of the app — used in alert email CTA links |
+| `ANTHROPIC_API_KEY` | Recommended | Claude AI for executive summaries (checklist item 1) |
 | `SESSION_SECRET` | Recommended | Random hex string for session signing |
 | `DB_PATH` | No | SQLite file path (default: `./audit.db`) |
+| `SFMC_ALERT_CLIENT_ID` | Alert emails | Installed package Client ID with write scopes |
+| `SFMC_ALERT_CLIENT_SECRET` | Alert emails | Installed package Client Secret |
+| `SFMC_ALERT_SUBDOMAIN` | Alert emails | MC subdomain (from `https://{{subdomain}}.marketingcloudapis.com`) |
+| `SFMC_ALERT_ACCOUNT_ID` | Alert emails | Business Unit MID |
+| `SFMC_ALERT_CB_ASSET_ID` | Alert emails | Content Builder HTML email asset ID |
+| `SFMC_ALERT_SEND_DEF_KEY` | Alert emails | Transactional send definition key |
 
 ---
 
 ## SFMC installed package setup
+
+### Audit package (required — add credentials via Manage Orgs)
 
 1. In Marketing Cloud, go to **Setup → Apps → Installed Packages → New**
 2. Add an **API Integration** component, type **Server-to-Server**
@@ -157,6 +178,26 @@ heroku open
    - Users: Accounts (Read)
 4. Save and copy the **Client ID**, **Client Secret**, and **Subdomain** (from your MC instance URL: `https://{{subdomain}}.marketingcloudapis.com`)
 5. For a child Business Unit, also copy the **MID** (Account ID)
+6. Add these credentials in the app via **Manage Orgs**
+
+### Alert email package (optional — required only for nightly alert emails)
+
+The alert email system requires a separate installed package with write access to Content Builder and Transactional Messaging. You can reuse the same package as above if you add the extra scopes, or create a dedicated one.
+
+**Additional scopes needed:**
+- Channels: Email (Read + Write)
+- Assets: Documents and Images (Read + Write)
+- Assets: Saved Content (Read + Write)
+- Messaging: (Read + Write)
+
+**One-time Content Builder setup:**
+1. In Content Builder, create a new **HTML Email** asset — paste in any placeholder HTML to start
+2. Note the asset's numeric **ID** (visible in the URL when editing it)
+3. Create a **Transactional Send Definition** via Setup → Transactional Messaging (or the REST API), pointing at the asset above
+4. Note the **Definition Key**
+5. Add all four values to `.env` (see [Environment variables reference](#environment-variables-reference))
+
+Once the alert package credentials and asset IDs are in `.env`, set your recipient email in the app's **Alerts → Alert Delivery** section. The nightly scheduler (02:00 UTC) will send an alert email whenever new Critical or High findings are detected.
 
 ---
 

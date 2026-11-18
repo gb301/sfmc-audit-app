@@ -8,7 +8,7 @@ const axios = require('axios');
 const { runs, findings: findingsDB } = require('./db');
 const { getAccessToken } = require('./sfmcAuth');
 
-const SEND_DEF_KEY = 'QADemoV1_AuditAlert_SendDef_v2';
+const SEND_DEF_KEY = process.env.SFMC_ALERT_SEND_DEF_KEY || 'QADemoV1_AuditAlert_SendDef_v2';
 const APP_URL = process.env.APP_URL || 'http://localhost:3001';
 
 function getPreviousRunFindings(orgId, excludeRunId) {
@@ -23,7 +23,7 @@ function diffFindings(currentFindings, previousFindings) {
   return currentFindings.filter(f => !prevKeys.has(`${f.title}||${f.entity_id || ''}`));
 }
 
-const CB_ASSET_ID = 1793555;
+const CB_ASSET_ID = process.env.SFMC_ALERT_CB_ASSET_ID ? Number(process.env.SFMC_ALERT_CB_ASSET_ID) : 1793555;
 
 function escapeHtml(str) {
   if (!str) return '';
@@ -112,7 +112,14 @@ function buildAlertHtml({ orgName, runDate, findings, appUrl, thresholdLabel }) 
  * don't support attribute substitution at send time.
  */
 async function sendAlertEmail(creds, org, newFindings, runId) {
-  const { accessToken, restBaseUrl } = await getAccessToken(creds);
+  // Use dedicated alert package credentials from env if provided, otherwise fall back to the org's own credentials
+  const alertCreds = process.env.SFMC_ALERT_CLIENT_ID ? {
+    clientId: process.env.SFMC_ALERT_CLIENT_ID,
+    clientSecret: process.env.SFMC_ALERT_CLIENT_SECRET,
+    subdomain: process.env.SFMC_ALERT_SUBDOMAIN,
+    accountId: process.env.SFMC_ALERT_ACCOUNT_ID,
+  } : creds;
+  const { accessToken, restBaseUrl } = await getAccessToken(alertCreds);
   const http = axios.create({
     baseURL: restBaseUrl,
     headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
