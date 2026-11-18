@@ -34,17 +34,32 @@ function escapeHtml(str) {
     .replace(/"/g, '&quot;');
 }
 
+const TABLE_LIMIT = 10;
+
 function buildAlertHtml({ orgName, runDate, findings, appUrl, thresholdLabel }) {
   const critical = findings.filter(f => f.severity === 'CRITICAL');
   const high = findings.filter(f => f.severity === 'HIGH');
 
-  const rows = findings.map(f => `
+  // Show top 10 critical first, then fill remaining slots with high
+  const topCritical = critical.slice(0, TABLE_LIMIT);
+  const remainingSlots = TABLE_LIMIT - topCritical.length;
+  const tableFindings = [...topCritical, ...high.slice(0, remainingSlots)];
+  const hiddenCount = findings.length - tableFindings.length;
+
+  const rows = tableFindings.map(f => `
     <tr style="border-bottom:1px solid #e5e7eb">
       <td style="padding:8px 10px;font-weight:700;color:${f.severity === 'CRITICAL' ? '#dc2626' : '#d97706'};white-space:nowrap">${escapeHtml(f.severity)}</td>
       <td style="padding:8px 10px;color:#6b7280;font-size:12px;white-space:nowrap">${escapeHtml(f.category || '')}</td>
       <td style="padding:8px 10px">${escapeHtml(f.title)}</td>
       <td style="padding:8px 10px;font-size:12px;color:#6b7280">${escapeHtml(f.entity_name || f.entity_id || '')}</td>
     </tr>`).join('');
+
+  const moreRow = hiddenCount > 0 ? `
+    <tr>
+      <td colspan="4" style="padding:10px;text-align:center;font-size:12px;color:#6b7280;background:#f9fafb;border-top:1px solid #e5e7eb">
+        + ${hiddenCount} more finding${hiddenCount === 1 ? '' : 's'} &mdash; <a href="${escapeHtml(appUrl)}" style="color:#032D60;font-weight:600">view the full report</a>
+      </td>
+    </tr>` : '';
 
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>SFMC Audit Alert</title></head>
 <body style="margin:0;padding:0;background:#f4f6f9;font-family:Arial,sans-serif">
@@ -77,10 +92,10 @@ function buildAlertHtml({ orgName, runDate, findings, appUrl, thresholdLabel }) 
           <th style="padding:8px 10px;text-align:left;font-size:11px;color:#6b7280;font-weight:600">ASSET</th>
         </tr>
       </thead>
-      <tbody>${rows}</tbody>
+      <tbody>${rows}${moreRow}</tbody>
     </table>
     <div style="text-align:center">
-      <a href="${escapeHtml(appUrl)}" style="background:#032D60;color:#fff;text-decoration:none;padding:12px 28px;border-radius:6px;font-size:13px;font-weight:600;display:inline-block">View Full Report</a>
+      <a href="${escapeHtml(appUrl)}" style="background:#032D60;color:#fff;text-decoration:none;padding:12px 28px;border-radius:6px;font-size:13px;font-weight:600;display:inline-block">View Full Report in SFMC Audit App</a>
     </div>
   </div>
   <div style="background:#f8f9fa;border:1px solid #e1e5eb;border-top:none;border-radius:0 0 8px 8px;padding:14px 32px">
@@ -111,13 +126,18 @@ async function sendAlertEmail(creds, org, newFindings, runId) {
   const html = buildAlertHtml({ orgName: org.name, runDate, findings: newFindings, appUrl: APP_URL, thresholdLabel });
   const subject = `SFMC Audit Alert: ${newFindings.length} new issue(s) in ${org.name}`;
 
-  // Patch the CB asset with the rendered HTML so the send picks it up
+  // Patch the CB asset with the rendered HTML
   await http.patch(`/asset/v1/content/assets/${CB_ASSET_ID}`, {
     views: {
       subjectline: { content: subject },
       html: { content: html },
     },
   });
+
+  // Cycle the send definition Inactive→Active so it picks up the new asset content
+  // (transactional send definitions cache content at activation time)
+  await http.patch(`/messaging/v1/email/definitions/${SEND_DEF_KEY}`, { status: 'Inactive' });
+  await http.patch(`/messaging/v1/email/definitions/${SEND_DEF_KEY}`, { status: 'Active' });
 
   const { data } = await http.post('/messaging/v1/email/messages', {
     definitionKey: SEND_DEF_KEY,
